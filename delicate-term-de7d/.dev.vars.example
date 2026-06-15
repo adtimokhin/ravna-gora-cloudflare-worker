@@ -1,0 +1,4 @@
+SUPABASE_URL=https://yourref.supabase.co
+SUPABASE_PROJECT_REF=yourref
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+ALLOWED_ORIGIN=http://localhost:3000

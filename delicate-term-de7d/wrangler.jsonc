@@ -13,6 +13,12 @@
 	"upload_source_maps": true,
 	"compatibility_flags": [
 		"nodejs_compat"
+	],
+	"r2_buckets": [
+		{
+			"binding": "PDFS",
+			"bucket_name": "ravna-gora-test"
+		}
 	]
 	/**
 	 * Smart Placement
