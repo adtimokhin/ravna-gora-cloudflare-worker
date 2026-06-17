@@ -22,6 +22,29 @@ app.use('*', (c, next) => {
 
 app.get('/health', (c) => c.json({ ok: true }));
 
+// GET /issues
+// Public. Returns all published issues ordered by issue_number desc.
+app.get('/issues', async (c) => {
+  try {
+    const supabase = getSupabase(c.env);
+    const { data, error } = await supabase
+      .from('issues')
+      .select('slug, issue_number, issue_date, cover_image_url, title')
+      .eq('published', true)
+      .order('issue_number', { ascending: false });
+
+    if (error) {
+      console.error('Error fetching issues:', error);
+      return c.json({ error: 'Failed to fetch issues' }, 500);
+    }
+
+    return c.json({ issues: data ?? [] });
+  } catch (err) {
+    console.error('Error:', err);
+    return c.json({ error: 'Internal server error' }, 500);
+  }
+});
+
 app.get('/issues/:slug/pdf', authMiddleware, async (c) => {
   const { slug } = c.req.param();
   try {
