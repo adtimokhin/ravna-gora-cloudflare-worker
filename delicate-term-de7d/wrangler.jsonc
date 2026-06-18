@@ -17,7 +17,8 @@
 	"r2_buckets": [
 		{
 			"binding": "PDFS",
-			"bucket_name": "ravna-gora-test"
+			// In the README.md mention that this must be set prior to running the worker
+			"bucket_name": "ravna-gora-bckt"
 		}
 	]
 	/**
