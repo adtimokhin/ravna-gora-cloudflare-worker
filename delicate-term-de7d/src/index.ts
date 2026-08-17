@@ -11,10 +11,11 @@ type Variables = { user: JWTPayload };
 const app = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 app.use('*', (c, next) => {
-  const origin = c.env.ALLOWED_ORIGIN;
-  if (!origin) return next();
+  const allowed = c.env.ALLOWED_ORIGIN;
+  if (!allowed) return next();
+  const allowedOrigins = allowed.split(',').map((o) => o.trim());
   return cors({
-    origin,
+    origin: (origin) => (allowedOrigins.includes(origin) ? origin : allowedOrigins[0]),
     allowMethods: ['GET', 'POST', 'PUT', 'OPTIONS'],
     allowHeaders: ['Authorization', 'Content-Type'],
   })(c, next);
