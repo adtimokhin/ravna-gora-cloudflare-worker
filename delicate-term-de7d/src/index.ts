@@ -4,6 +4,7 @@ import type { JWTPayload } from 'jose';
 import type { Env } from './types';
 import { authMiddleware } from './auth';
 import { adminMiddleware } from './admin';
+import { membershipMiddleware } from './membership';
 import { getSupabase } from './supabase';
 
 type Variables = { user: JWTPayload };
@@ -46,7 +47,9 @@ app.get('/issues', async (c) => {
   }
 });
 
-app.get('/issues/:slug/pdf', authMiddleware, async (c) => {
+// Gated content: requires a currently-active membership. Admins bypass this
+// check entirely (see membershipMiddleware).
+app.get('/issues/:slug/pdf', authMiddleware, membershipMiddleware, async (c) => {
   const { slug } = c.req.param();
   try {
     const supabase = getSupabase(c.env);

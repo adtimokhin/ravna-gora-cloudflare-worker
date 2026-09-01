@@ -20,6 +20,12 @@
 			// In the README.md mention that this must be set prior to running the worker
 			"bucket_name": "ravna-gora-bckt"
 		}
+	],
+	"kv_namespaces": [
+		{
+			"binding": "MEMBERSHIP_CACHE",
+			"id": "ab05b06d2f5f4b05928a7dd5203350e1"
+		}
 	]
 	/**
 	 * Smart Placement
