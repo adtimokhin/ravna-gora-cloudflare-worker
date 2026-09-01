@@ -1,5 +1,6 @@
 export interface Env {
   PDFS: R2Bucket;
+  MEMBERSHIP_CACHE: KVNamespace;
   SUPABASE_URL: string;
   SUPABASE_PROJECT_REF: string;
   SUPABASE_SERVICE_ROLE_KEY: string;
