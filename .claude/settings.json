@@ -1,0 +1,9 @@
+{
+  "enabledPlugins": {
+    "block-dangerous-commands@claude-code-hooks": true,
+    "protect-secrets@claude-code-hooks": true,
+    "git-safety@claude-code-hooks": true,
+    "auto-stage@claude-code-hooks": true,
+    "format-code@claude-code-hooks": true
+  }
+}
