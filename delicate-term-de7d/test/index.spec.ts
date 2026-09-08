@@ -30,7 +30,13 @@ describe('PDF Worker', () => {
 });
 
 describe('Stripe endpoints', () => {
-	const authGated = ['/create-checkout-session', '/cancel-subscription', '/deactivate-account', '/admin/gift-membership'];
+	const authGated = [
+		'/create-checkout-session',
+		'/create-donation-session',
+		'/cancel-subscription',
+		'/deactivate-account',
+		'/admin/gift-membership',
+	];
 
 	for (const path of authGated) {
 		it(`POST ${path} without a token returns 401`, async () => {

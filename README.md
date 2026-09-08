@@ -44,14 +44,18 @@ wrangler secret put SUPABASE_SERVICE_ROLE_KEY # service role key — never expos
 wrangler secret put ALLOWED_ORIGIN            # frontend origin, e.g. https://yoursite.vercel.app
 wrangler secret put STRIPE_SECRET_KEY         # sk_live_… / sk_test_…
 wrangler secret put STRIPE_WEBHOOK_SECRET     # whsec_… from the webhook endpoint you create in Stripe
-wrangler secret put MEMBERSHIP_SUCCESS_URL    # frontend URL Stripe returns to on success
-wrangler secret put MEMBERSHIP_CANCEL_URL     # frontend URL Stripe returns to on cancel
+wrangler secret put MEMBERSHIP_SUCCESS_URL    # frontend URL Stripe returns to on membership success
+wrangler secret put MEMBERSHIP_CANCEL_URL     # frontend URL Stripe returns to on membership cancel
+wrangler secret put DONATION_SUCCESS_URL      # frontend URL Stripe returns to on donation success
+wrangler secret put DONATION_CANCEL_URL       # frontend URL Stripe returns to on donation cancel
 wrangler secret put STRIPE_PRICE_MAP          # JSON — see "Stripe membership" below
 ```
 
 > **Note:** `SUPABASE_JWT_SECRET` is **not** used. Auth is done via JWKS (`/auth/v1/.well-known/jwks.json`), which rotates automatically and requires no secret stored in the worker.
 
-> `MEMBERSHIP_SUCCESS_URL` may contain the literal `{CHECKOUT_SESSION_ID}` placeholder; Stripe substitutes the real Checkout Session id.
+> `MEMBERSHIP_SUCCESS_URL` and `DONATION_SUCCESS_URL` may contain the literal `{CHECKOUT_SESSION_ID}` placeholder; Stripe substitutes the real Checkout Session id.
+>
+> Production values: `ALLOWED_ORIGIN` = `https://ravnagorachetniks.org,http://localhost:3000`; `MEMBERSHIP_SUCCESS_URL` = `https://ravnagorachetniks.org/membership/success?session_id={CHECKOUT_SESSION_ID}`; `MEMBERSHIP_CANCEL_URL` = `https://ravnagorachetniks.org/membership`; `DONATION_SUCCESS_URL` = `https://ravnagorachetniks.org/donate/success?session_id={CHECKOUT_SESSION_ID}`; `DONATION_CANCEL_URL` = `https://ravnagorachetniks.org/donate`.
 
 ### 3. Supabase: create the `profiles` table
 
@@ -134,10 +138,11 @@ edition also gets a row in `mailing_addresses`. The paywall
 | Endpoint                        | Body                                                                    | Notes                                                                                                                                                              |
 | ------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `POST /create-checkout-session` | `{ "price_id": "price_…" }`                                             | 409 if the caller already has a membership. Returns `{ id, url }` — redirect the browser to `url`.                                                                 |
+| `POST /create-donation-session` | `{ "amount_cents": <int> }`                                            | One-time donation, hosted Checkout `mode: "payment"`. JWT required. `amount_cents` integer USD in `[100, 1_000_000]`. Returns `{ id, url }` — redirect to `url`. `donations` row written by the webhook. |
 | `POST /cancel-subscription`     | `{ "subscription_id": "sub_…" }`                                        | Sets `cancel_at_period_end`; access lasts until the period ends. 404 if the subscription isn't the caller's, 409 if it's not active.                               |
 | `POST /deactivate-account`      | _(none)_                                                                | Voids + cancels every active subscription, then bans the Supabase auth user (indefinite `ban_duration`).                                                           |
 | `POST /admin/gift-membership`   | `{ "target_uid", "price_id", "custom_expiration", "mailing_address"? }` | Admin only. Inserts a `memberships` row with `status='active'`, no Stripe subscription, `current_period_end = custom_expiration`.                                  |
-| `POST /webhooks/stripe`         | Stripe event (raw body)                                                 | Handles `checkout.session.completed`, `invoice.paid`, `customer.subscription.updated`, `customer.subscription.deleted`. Other events are acknowledged and ignored. |
+| `POST /webhooks/stripe`         | Stripe event (raw body)                                                 | Handles `checkout.session.completed` (subscription **and** donation), `invoice.paid`, `customer.subscription.updated`, `customer.subscription.deleted`, `payment_intent.succeeded`. Other events are acknowledged and ignored. |
 
 ### `STRIPE_PRICE_MAP`
 
@@ -146,25 +151,34 @@ membership it grants via this JSON secret:
 
 ```json
 {
-  "price_full_digital": { "plan": "full", "edition": "digital" },
-  "price_full_print": { "plan": "full", "edition": "print" },
-  "price_supporting": { "plan": "supporting", "edition": null }
+  "price_1AbcSupportingDigital": { "plan": "supporting", "edition": "digital" },
+  "price_1AbcSupportingPrint": { "plan": "supporting", "edition": "print" },
+  "price_1AbcSupportingBoth": { "plan": "supporting", "edition": "print" },
+  "price_1AbcFull": { "plan": "full", "edition": null }
 }
 ```
 
+- Keys are the **real Stripe price ids**. Production must carry all four: supporting
+  digital, supporting print, supporting **both**, full.
 - `plan` — `"full"` or `"supporting"` (written to `memberships.plan`).
 - `edition` — `"digital"`, `"print"`, or `null`. `"print"` makes Checkout collect
-  a shipping address and writes a `mailing_addresses` row.
+  a shipping address and writes a `mailing_addresses` row. The frontend's "both"
+  (digital + print) edition has **no** dedicated value — map that price id to
+  `edition: "print"`; the `memberships` row can't then distinguish "both" from
+  plain "print".
 - At checkout an unknown `price_id` is a 400. In the webhook an unknown price is
   logged and falls back to `{ plan: "supporting", edition: null }` on insert
   (existing `plan` / `edition` are left untouched on update).
+- One-time donations (`/create-donation-session`) do **not** use this map — the
+  amount is an inline `price_data`, no Stripe Price object.
 
 ### Webhook setup
 
 1. In the Stripe Dashboard, add an endpoint pointing at
    `https://<your-worker-host>/webhooks/stripe`.
 2. Subscribe it to `checkout.session.completed`, `invoice.paid`,
-   `customer.subscription.updated`, `customer.subscription.deleted`.
+   `customer.subscription.updated`, `customer.subscription.deleted`,
+   `payment_intent.succeeded` (the last one records one-time donations).
 3. Copy the signing secret (`whsec_…`) into `STRIPE_WEBHOOK_SECRET`.
 
 Signatures are verified with `constructEventAsync` + `SubtleCryptoProvider`
@@ -214,6 +228,7 @@ npm run deploy
 | `POST` | `/admin/issues/:slug/cover` | JWT + Admin      | Upload a cover image; updates `cover_image_url` in Supabase     |
 | `GET`  | `/debug/list-bucket`        | JWT              | List all R2 object keys — **remove before production**          |
 | `POST` | `/create-checkout-session`  | JWT              | Start a Stripe Checkout for a membership subscription           |
+| `POST` | `/create-donation-session`  | JWT              | Start a Stripe Checkout for a one-time donation (`mode: payment`) |
 | `POST` | `/cancel-subscription`      | JWT              | Set `cancel_at_period_end` on the caller's subscription         |
 | `POST` | `/deactivate-account`       | JWT              | Pause + cancel the caller's subscriptions and ban the auth user |
 | `POST` | `/admin/gift-membership`    | JWT + Admin      | Grant a membership with no Stripe subscription                  |

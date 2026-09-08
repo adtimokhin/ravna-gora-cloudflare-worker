@@ -146,6 +146,15 @@ const SHIPPING_COUNTRIES: Stripe.Checkout.SessionCreateParams.ShippingAddressCol
 // with MEMBERSHIP_ACTIVE_STATUSES in membership.ts.
 const SUBSCRIPTION_ACTIVE_STATUSES = ['active', 'past_due', 'trialing'];
 
+// One-time donation guardrails. Hardcoded (like SHIPPING_COUNTRIES above) rather
+// than env-configurable. USD, integer cents. Stripe's own minimum charge is
+// $0.50; we floor higher at $1.00 and cap at $10,000.00 to bound abuse. The
+// amount is client-supplied (a free donation) so it must be validated here and
+// never trusted blindly.
+const DONATION_CURRENCY = 'usd';
+const DONATION_MIN_CENTS = 100;
+const DONATION_MAX_CENTS = 1_000_000;
+
 // ---------------------------------------------------------------------------
 // Stripe field helpers (defensive across API versions)
 // ---------------------------------------------------------------------------
@@ -365,6 +374,60 @@ async function markSubscriptionCanceled(env: Env, sub: Stripe.Subscription): Pro
 	if (uid) await bustAccessCache(env, uid);
 }
 
+// Record a completed one-time donation. The `donations` table is NOT owned by
+// this repo — its shape is defined in ravna-gora/supabase/schema/memberships.sql
+// (the Next.js app). Columns written: user_id, stripe_payment_intent_id (unique),
+// amount_cents, status. Idempotent: an upsert on the unique index, so redelivered
+// checkout.session.completed events are safe. Only ever called for
+// mode === "payment" sessions carrying metadata.kind === "donation".
+async function recordDonationFromSession(env: Env, session: Stripe.Checkout.Session): Promise<void> {
+	const paymentIntentId =
+		typeof session.payment_intent === 'string' ? session.payment_intent : (session.payment_intent?.id ?? null);
+	if (!paymentIntentId) {
+		console.warn('Donation session', session.id, 'has no payment_intent — skipping');
+		return;
+	}
+
+	const uid =
+		session.client_reference_id ?? (typeof session.metadata?.supabase_uid === 'string' ? session.metadata.supabase_uid : null);
+	if (!uid || !UUID_RE.test(uid)) {
+		console.warn('Donation session', session.id, '— no valid Supabase user id — skipping');
+		return;
+	}
+
+	// Stripe's own figure, not the client's — amount_total is what was actually
+	// charged (integer cents).
+	const amountCents = typeof session.amount_total === 'number' ? session.amount_total : null;
+	if (amountCents === null) {
+		console.warn('Donation session', session.id, '— no amount_total — skipping');
+		return;
+	}
+
+	const status = session.payment_status === 'paid' ? 'succeeded' : 'pending';
+
+	const supabase = getSupabase(env);
+	const { error } = await supabase.from('donations').upsert(
+		{
+			user_id: uid,
+			stripe_payment_intent_id: paymentIntentId,
+			amount_cents: amountCents,
+			status,
+		},
+		{ onConflict: 'stripe_payment_intent_id' },
+	);
+	if (error) throw error;
+}
+
+// Flip a donation to "succeeded" once its PaymentIntent confirms — covers a
+// delayed / asynchronous capture where checkout.session.completed arrived while
+// still unpaid. No-ops harmlessly when no donation row matches (e.g. a
+// membership invoice's PaymentIntent), same as the reference app's webhook.
+async function markDonationSucceeded(env: Env, paymentIntentId: string): Promise<void> {
+	const supabase = getSupabase(env);
+	const { error } = await supabase.from('donations').update({ status: 'succeeded' }).eq('stripe_payment_intent_id', paymentIntentId);
+	if (error) throw error;
+}
+
 // ---------------------------------------------------------------------------
 // Route handlers
 // ---------------------------------------------------------------------------
@@ -432,6 +495,71 @@ async function createCheckoutSession(c: Context<HonoEnv>) {
 	} catch (err) {
 		console.error('Stripe checkout.sessions.create failed:', err);
 		return c.json({ error: 'Could not start checkout' }, 500);
+	}
+}
+
+// POST /create-donation-session  (authMiddleware)
+// Body: { amount_cents: number }  ->  { id, url }
+// A one-time donation via hosted Stripe Checkout (mode: "payment"). Modelled on
+// createCheckoutSession, with two differences: no resolveAccess guard (anyone
+// signed in may donate, members included), and no DB write here — the `donations`
+// row is created by the webhook on checkout.session.completed. JWT is required:
+// this Worker has no rate-limiting, so an unauthenticated Stripe-object-creating
+// route would be a card-testing vector, and the reference frontend already
+// requires a signed-in user to donate.
+async function createDonationSession(c: Context<HonoEnv>) {
+	const user = c.get('user');
+	const uid = user.sub;
+	if (!uid) return c.json({ error: 'Invalid token: missing user ID' }, 401);
+
+	let body: unknown;
+	try {
+		body = await c.req.json();
+	} catch {
+		return c.json({ error: 'Invalid JSON body' }, 400);
+	}
+
+	const amountCents = (body as { amount_cents?: unknown }).amount_cents;
+	if (typeof amountCents !== 'number' || !Number.isInteger(amountCents) || amountCents <= 0) {
+		return c.json({ error: 'amount_cents must be a positive integer number of cents' }, 400);
+	}
+	if (amountCents < DONATION_MIN_CENTS) {
+		return c.json({ error: `Donation must be at least $${(DONATION_MIN_CENTS / 100).toFixed(2)}` }, 400);
+	}
+	if (amountCents > DONATION_MAX_CENTS) {
+		return c.json({ error: `Donation may not exceed $${(DONATION_MAX_CENTS / 100).toFixed(2)}` }, 400);
+	}
+
+	const params: Stripe.Checkout.SessionCreateParams = {
+		mode: 'payment',
+		submit_type: 'donate',
+		line_items: [
+			{
+				quantity: 1,
+				price_data: {
+					currency: DONATION_CURRENCY,
+					unit_amount: amountCents,
+					product_data: { name: 'Donation' },
+				},
+			},
+		],
+		client_reference_id: uid,
+		// `kind: "donation"` lets the webhook tell a donation payment-mode session
+		// apart from any other one-time Checkout added later.
+		metadata: { supabase_uid: uid, kind: 'donation' },
+		payment_intent_data: { metadata: { supabase_uid: uid, kind: 'donation' } },
+		success_url: c.env.DONATION_SUCCESS_URL,
+		cancel_url: c.env.DONATION_CANCEL_URL,
+	};
+	if (typeof user.email === 'string') params.customer_email = user.email;
+
+	const stripe = stripeClient(c.env);
+	try {
+		const session = await stripe.checkout.sessions.create(params);
+		return c.json({ id: session.id, url: session.url });
+	} catch (err) {
+		console.error('Stripe donation checkout.sessions.create failed:', err);
+		return c.json({ error: 'Could not start donation checkout' }, 500);
 	}
 }
 
@@ -671,6 +799,16 @@ async function stripeWebhook(c: Context<HonoEnv>) {
 		switch (event.type) {
 			case 'checkout.session.completed': {
 				const session = event.data.object as Stripe.Checkout.Session;
+				// Additive: one-time donation checkouts (mode "payment"). The
+				// subscription handling below is unchanged.
+				if (session.mode === 'payment') {
+					if (session.metadata?.kind !== 'donation') {
+						console.warn('checkout.session.completed: payment-mode session', session.id, 'is not a donation — ignoring');
+						break;
+					}
+					await recordDonationFromSession(c.env, session);
+					break;
+				}
 				if (session.mode !== 'subscription' || typeof session.subscription !== 'string') break;
 				const uid =
 					session.client_reference_id ?? (typeof session.metadata?.supabase_uid === 'string' ? session.metadata.supabase_uid : null);
@@ -699,6 +837,13 @@ async function stripeWebhook(c: Context<HonoEnv>) {
 				await markSubscriptionCanceled(c.env, sub);
 				break;
 			}
+			case 'payment_intent.succeeded': {
+				// Additive: confirms a one-time donation. No-ops when the PaymentIntent
+				// belongs to a membership invoice (no matching donation row).
+				const pi = event.data.object as Stripe.PaymentIntent;
+				await markDonationSucceeded(c.env, pi.id);
+				break;
+			}
 			default:
 				// Explicitly ignored (includes charge.refunded — there is no one-time
 				// purchase ledger in this project to reverse).
@@ -718,6 +863,7 @@ async function stripeWebhook(c: Context<HonoEnv>) {
 
 export function registerStripeRoutes(app: Hono<HonoEnv>) {
 	app.post('/create-checkout-session', authMiddleware, createCheckoutSession);
+	app.post('/create-donation-session', authMiddleware, createDonationSession);
 	app.post('/cancel-subscription', authMiddleware, cancelSubscription);
 	app.post('/deactivate-account', authMiddleware, deactivateAccount);
 	app.post('/admin/gift-membership', authMiddleware, adminMiddleware, giftMembership);

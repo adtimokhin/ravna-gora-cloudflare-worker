@@ -6,9 +6,17 @@ ALLOWED_ORIGIN=http://localhost:3000
 # Stripe
 STRIPE_SECRET_KEY=sk_test_xxx
 STRIPE_WEBHOOK_SECRET=whsec_xxx
-# Checkout return URLs (frontend). MEMBERSHIP_SUCCESS_URL may contain the
-# literal {CHECKOUT_SESSION_ID} placeholder — Stripe fills it in.
+# Membership Checkout return URLs (frontend). MEMBERSHIP_SUCCESS_URL may contain
+# the literal {CHECKOUT_SESSION_ID} placeholder — Stripe fills it in.
+# Production values live in API.md's config section, not here.
 MEMBERSHIP_SUCCESS_URL=http://localhost:3000/membership/success?session_id={CHECKOUT_SESSION_ID}
 MEMBERSHIP_CANCEL_URL=http://localhost:3000/membership
+# One-time donation Checkout return URLs (frontend). Same {CHECKOUT_SESSION_ID}
+# placeholder rule for DONATION_SUCCESS_URL.
+DONATION_SUCCESS_URL=http://localhost:3000/donate/success?session_id={CHECKOUT_SESSION_ID}
+DONATION_CANCEL_URL=http://localhost:3000/donate
 # Maps each Stripe price id to the membership it grants. Edit per Stripe account.
-STRIPE_PRICE_MAP={"price_full_digital":{"plan":"full","edition":"digital"},"price_full_print":{"plan":"full","edition":"print"},"price_supporting":{"plan":"supporting","edition":null}}
+# The keys must be the REAL Stripe price ids; the four below are placeholders.
+# "both" (digital+print) has no dedicated edition — it maps to edition "print"
+# (that is what makes Checkout collect a shipping address).
+STRIPE_PRICE_MAP={"price_supporting_digital":{"plan":"supporting","edition":"digital"},"price_supporting_print":{"plan":"supporting","edition":"print"},"price_supporting_both":{"plan":"supporting","edition":"print"},"price_full":{"plan":"full","edition":null}}

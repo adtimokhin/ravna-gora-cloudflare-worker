@@ -1,6 +1,6 @@
 # Ravna Gora API Reference
 
-HTTP API for the `delicate-term-de7d` Cloudflare Worker — a [Hono](https://hono.dev) app that serves issue metadata, gates issue PDFs behind an active membership, handles Stripe membership checkout/lifecycle, and exposes admin upload endpoints.
+HTTP API for the `delicate-term-de7d` Cloudflare Worker — a [Hono](https://hono.dev) app that serves issue metadata, gates issue PDFs behind an active membership, handles Stripe membership checkout/lifecycle and one-time donations, and exposes admin upload endpoints.
 
 Everything here is derived from the source (`delicate-term-de7d/src/`), not from any README.
 
@@ -66,6 +66,33 @@ A single `app.use('*', …)` wraps every route:
 
 ---
 
+## Configuration
+
+Environment (`.dev.vars` locally, `wrangler secret put` in production — see `README.md`).
+The behaviour-relevant ones:
+
+| Variable                 | Notes                                                                                                                                                                              |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ALLOWED_ORIGIN`         | Comma-separated allow-list. **Production must be exactly** `https://ravnagorachetniks.org,http://localhost:3000`. Empty ⇒ no CORS headers at all (browser calls fail).                |
+| `MEMBERSHIP_SUCCESS_URL` | Prod: `https://ravnagorachetniks.org/membership/success?session_id={CHECKOUT_SESSION_ID}`. Local: `http://localhost:3000/membership/success?session_id={CHECKOUT_SESSION_ID}`. `{CHECKOUT_SESSION_ID}` is substituted by Stripe. |
+| `MEMBERSHIP_CANCEL_URL`  | Prod: `https://ravnagorachetniks.org/membership`. Local: `http://localhost:3000/membership`.                                                                                         |
+| `DONATION_SUCCESS_URL`   | Prod: `https://ravnagorachetniks.org/donate/success?session_id={CHECKOUT_SESSION_ID}`. Local: `http://localhost:3000/donate/success?session_id={CHECKOUT_SESSION_ID}`. Same placeholder rule. |
+| `DONATION_CANCEL_URL`    | Prod: `https://ravnagorachetniks.org/donate`. Local: `http://localhost:3000/donate`.                                                                                                 |
+| `STRIPE_PRICE_MAP`       | JSON `{ "<real price id>": { "plan": "full"\|"supporting", "edition": "digital"\|"print"\|null } }`. **Production must contain all four real Stripe price ids**: supporting/digital, supporting/print, supporting/**both**, full. "both" has no dedicated edition — map it to `edition: "print"` (that is what makes Checkout collect a shipping address). Consequence: a "both" member's `memberships` row is indistinguishable from a plain "print" member (no `price_id` column). |
+| `STRIPE_WEBHOOK_SECRET`  | `whsec_…` from the Stripe Dashboard webhook endpoint.                                                                                                                                |
+
+**Stripe Dashboard webhook** must subscribe to: `checkout.session.completed`,
+`invoice.paid`, `customer.subscription.updated`, `customer.subscription.deleted`,
+`payment_intent.succeeded`.
+
+**External table dependency:** `/create-donation-session` + the webhook write a
+`donations` row. That table is **not** defined in this repo — its schema is
+`ravna-gora/supabase/schema/memberships.sql` in the Next.js app
+(`donation_id`, `user_id`, `stripe_payment_intent_id` unique, `amount_cents`,
+`status`, `created_at`). No migration in this repo creates it.
+
+---
+
 ## Summary of endpoints
 
 | Method | Path                        | Auth                         | Purpose                                            |
@@ -75,13 +102,14 @@ A single `app.use('*', …)` wraps every route:
 | GET    | `/covers/:filename`         | none                         | Serve a cover image from R2                        |
 | GET    | `/issues/:slug/pdf`         | JWT + active membership      | Stream a published issue's PDF                     |
 | POST   | `/create-checkout-session`  | JWT                          | Start a Stripe membership Checkout session         |
+| POST   | `/create-donation-session`  | JWT                          | Start a Stripe one-time donation Checkout session  |
 | POST   | `/cancel-subscription`      | JWT                          | Schedule a subscription to cancel at period end    |
 | POST   | `/deactivate-account`       | JWT                          | Pause/cancel all subscriptions and ban the account |
 | POST   | `/admin/issues/:slug/pdf`   | JWT + admin                  | Upload an issue PDF to R2                          |
 | POST   | `/admin/issues/:slug/cover` | JWT + admin                  | Upload an issue cover image and update the DB      |
 | POST   | `/admin/gift-membership`    | JWT + admin                  | Grant a membership with no Stripe subscription     |
 | GET    | `/debug/list-bucket`        | JWT (any authenticated user) | List all R2 object keys                            |
-| POST   | `/webhooks/stripe`          | Stripe signature             | Stripe subscription lifecycle webhook              |
+| POST   | `/webhooks/stripe`          | Stripe signature             | Stripe subscription + donation lifecycle webhook   |
 
 ---
 
@@ -293,6 +321,49 @@ Create a Stripe Checkout Session (`mode: "subscription"`) for the calling user a
 - **500** `{ "error": "Could not start checkout" }` — the Stripe API call failed.
 - Plus `authMiddleware` **401**s.
 
+## POST /create-donation-session
+
+Create a Stripe Checkout Session (`mode: "payment"` — a one-time charge, **not** a
+subscription) for a free-choice donation and return its id + hosted URL.
+
+- **Auth:** Supabase JWT. Middleware: `authMiddleware` → handler. JWT is **required** —
+  there is no anonymous donation path (the Worker has no rate-limiting, so an
+  unauthenticated Stripe-object-creating route would be a card-testing vector; the
+  frontend also requires a signed-in user to donate).
+- **Params:** none.
+- **Request body:** `application/json`:
+
+  | Field         | Type   | Required | Validation                                                                                          |
+  | ------------- | ------ | -------- | -------------------------------------------------------------------------------------------------- |
+  | `amount_cents` | number | yes      | integer, `> 0`, and within `[DONATION_MIN_CENTS, DONATION_MAX_CENTS]` = **`[100, 1_000_000]`** (USD $1.00 – $10,000.00). These are hardcoded constants in `src/stripe.ts`, not env vars. |
+
+  Currency is fixed server-side to `usd`. No other fields are read — the donor's
+  `uid` comes from the JWT, the return URLs from Worker config.
+
+- **Behavior / side effects:**
+  - No `resolveAccess` guard — anyone signed in may donate, existing members included.
+  - Builds `Stripe.Checkout.SessionCreateParams`: `mode: "payment"`, `submit_type: "donate"`,
+    one line item `{ quantity: 1, price_data: { currency: "usd", unit_amount: amount_cents, product_data: { name: "Donation" } } }`
+    (inline price — **no** Stripe Price object and **no** `STRIPE_PRICE_MAP` entry),
+    `client_reference_id = uid`, `metadata` and `payment_intent_data.metadata` both
+    `{ supabase_uid: uid, kind: "donation" }`, `success_url = DONATION_SUCCESS_URL`,
+    `cancel_url = DONATION_CANCEL_URL`.
+  - If the JWT has an `email`, it is passed as `customer_email`.
+  - Calls Stripe `checkout.sessions.create`. **No `donations` row is written here** —
+    that happens on the `checkout.session.completed` webhook (the PaymentIntent does
+    not exist until the donor pays, so an abandoned checkout leaves no orphan row).
+- **200**
+  ```json
+  { "id": "cs_test_…", "url": "https://checkout.stripe.com/c/pay/cs_test_…" }
+  ```
+- **400** `{ "error": "Invalid JSON body" }` — body not JSON.
+- **400** `{ "error": "amount_cents must be a positive integer number of cents" }` — missing / not an integer / `<= 0`.
+- **400** `{ "error": "Donation must be at least $1.00" }` — below `DONATION_MIN_CENTS`.
+- **400** `{ "error": "Donation may not exceed $10,000.00" }` — above `DONATION_MAX_CENTS`.
+- **401** `{ "error": "Invalid token: missing user ID" }` — JWT has no `sub`.
+- **500** `{ "error": "Could not start donation checkout" }` — the Stripe API call failed.
+- Plus `authMiddleware` **401**s.
+
 ## POST /cancel-subscription
 
 Schedule the caller's subscription to cancel at the end of the current billing period (`cancel_at_period_end = true`). Access is retained until the period lapses.
@@ -356,18 +427,26 @@ Stripe subscription-lifecycle webhook. **No Hono auth middleware** — it is reg
 
 | `event.type`                    | Action                                                                                                                                                                                                                                              |
 | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `checkout.session.completed`    | Only if `session.mode === "subscription"` and `session.subscription` is a string. Resolves `uid` from `client_reference_id` (fallback `metadata.supabase_uid`) and a `price_id` hint from `metadata.price_id`, then `upsertSubscriptionFromStripe`. |
+| `checkout.session.completed`    | **`session.mode === "payment"`:** if `session.metadata.kind === "donation"`, `recordDonationFromSession` (see below); any other payment-mode session is logged and ignored. **`session.mode === "subscription"`** (and `session.subscription` is a string): resolves `uid` from `client_reference_id` (fallback `metadata.supabase_uid`) and a `price_id` hint from `metadata.price_id`, then `upsertSubscriptionFromStripe`. |
 | `invoice.paid`                  | Extracts the subscription id from the invoice (handles old `invoice.subscription` and new `parent.subscription_details.subscription` shapes), then `upsertSubscriptionFromStripe`.                                                                  |
 | `customer.subscription.updated` | `upsertSubscriptionFromStripe` for `sub.id`, passing `uid` from `sub.metadata.supabase_uid` if present.                                                                                                                                             |
 | `customer.subscription.deleted` | `markSubscriptionCanceled` — sets `memberships.status = "canceled"`, copies `cancel_at_period_end`, busts the access cache.                                                                                                                         |
+| `payment_intent.succeeded`      | `markDonationSucceeded` — sets `donations.status = "succeeded"` for the row matching `stripe_payment_intent_id`. No-ops when no donation row matches (e.g. a membership invoice's PaymentIntent). Covers a delayed capture where `checkout.session.completed` arrived unpaid. |
 
-**Explicitly ignored:** every other `event.type` (the `default` branch, which the code notes includes `charge.refunded` — there is no one-time-purchase ledger to reverse). Ignored events still return `200`.
+**Explicitly ignored:** every other `event.type` (the `default` branch, which the code notes includes `charge.refunded` — there is no purchase ledger to reverse). Ignored events still return `200`.
+
+> **Dashboard setup:** the Stripe webhook endpoint must subscribe to
+> `checkout.session.completed`, `invoice.paid`, `customer.subscription.updated`,
+> `customer.subscription.deleted`, **and `payment_intent.succeeded`** (the last one
+> added for donations).
+
+**`recordDonationFromSession` side effects:** resolves the PaymentIntent id (`session.payment_intent`, string or expanded); resolves `uid` from `client_reference_id` (fallback `metadata.supabase_uid`) and requires a valid UUID (otherwise logs and returns without writing); reads the charged amount from `session.amount_total` (Stripe's figure, not the client's); **upserts** the `donations` row on the `stripe_payment_intent_id` unique index, writing `user_id`, `amount_cents`, and `status` = `"succeeded"` when `session.payment_status === "paid"` else `"pending"`. The `donations` table is **not** defined in this repo — its schema lives in `ravna-gora/supabase/schema/memberships.sql` (the Next.js app). No access-cache bust (donations don't affect the paywall).
 
 **`upsertSubscriptionFromStripe` side effects:** `stripe.subscriptions.retrieve`; resolves the Supabase `uid` (option → `sub.metadata.supabase_uid` → `memberships` lookup by subscription id) and requires it to be a valid UUID (otherwise it logs and returns without writing); resolves plan/edition from `STRIPE_PRICE_MAP` (a recognised price wins; otherwise the existing row's values; otherwise the fallback `{ plan: "supporting", edition: null }`); **upserts** the `memberships` row on the `stripe_subscription_id` unique index, writing the raw Stripe `status`, `current_period_end`, `cancel_at_period_end`, `plan`, `edition`; for `edition === "print"` with a checkout session present, upserts a `mailing_addresses` row from the session's collected shipping details; finally `bustAccessCache(uid)`.
 
 **Responses**
 
-- **200** `{ "received": true }` — signature valid; event handled or intentionally ignored. (Idempotent: writes are upserts keyed on `stripe_subscription_id`, so redelivered events are safe.)
+- **200** `{ "received": true }` — signature valid; event handled or intentionally ignored. (Idempotent: writes are upserts keyed on `stripe_subscription_id` / `stripe_payment_intent_id`, so redelivered events are safe.)
 - **400** `Webhook Error: <message>` (`text/plain`) — signature verification failed. Stripe will **not** retry.
 - **500** `Handler error` (`text/plain`) — an exception was thrown while processing a handled event. Stripe **will** retry delivery.
 
