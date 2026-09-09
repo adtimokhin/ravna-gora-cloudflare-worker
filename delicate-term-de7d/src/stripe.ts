@@ -338,9 +338,10 @@ async function upsertSubscriptionFromStripe(
 	if (writeError) throw writeError;
 	const membershipId = written.membership_id;
 
-	// Shipping address: only available on the checkout session, only for print.
+	// Shipping address: only available on the checkout session. Collected for
+	// `print` editions and for every `full` membership (see createCheckoutSession).
 	const effectiveEdition = effective.edition;
-	if (effectiveEdition === 'print' && opts.session) {
+	if ((effectiveEdition === 'print' || effective.plan === 'full') && opts.session) {
 		const shipping = getSessionShipping(opts.session);
 		if (shipping) {
 			await upsertMailingAddress(env, {
@@ -381,15 +382,13 @@ async function markSubscriptionCanceled(env: Env, sub: Stripe.Subscription): Pro
 // checkout.session.completed events are safe. Only ever called for
 // mode === "payment" sessions carrying metadata.kind === "donation".
 async function recordDonationFromSession(env: Env, session: Stripe.Checkout.Session): Promise<void> {
-	const paymentIntentId =
-		typeof session.payment_intent === 'string' ? session.payment_intent : (session.payment_intent?.id ?? null);
+	const paymentIntentId = typeof session.payment_intent === 'string' ? session.payment_intent : (session.payment_intent?.id ?? null);
 	if (!paymentIntentId) {
 		console.warn('Donation session', session.id, 'has no payment_intent — skipping');
 		return;
 	}
 
-	const uid =
-		session.client_reference_id ?? (typeof session.metadata?.supabase_uid === 'string' ? session.metadata.supabase_uid : null);
+	const uid = session.client_reference_id ?? (typeof session.metadata?.supabase_uid === 'string' ? session.metadata.supabase_uid : null);
 	if (!uid || !UUID_RE.test(uid)) {
 		console.warn('Donation session', session.id, '— no valid Supabase user id — skipping');
 		return;
@@ -484,7 +483,9 @@ async function createCheckoutSession(c: Context<HonoEnv>) {
 		cancel_url: c.env.MEMBERSHIP_CANCEL_URL,
 	};
 	if (typeof user.email === 'string') params.customer_email = user.email;
-	if (config.edition === 'print') {
+	// `print` editions need a shipping address for the physical copy; the `full`
+	// membership always collects a mailing address too, regardless of edition.
+	if (config.edition === 'print' || config.plan === 'full') {
 		params.shipping_address_collection = { allowed_countries: SHIPPING_COUNTRIES };
 	}
 
