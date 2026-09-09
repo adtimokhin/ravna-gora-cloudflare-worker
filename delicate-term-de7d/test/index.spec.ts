@@ -49,6 +49,15 @@ describe('Stripe endpoints', () => {
 		});
 	}
 
+	it('POST /admin/migrate-users without a token returns 401', async () => {
+		const response = await SELF.fetch('https://example.com/admin/migrate-users', {
+			method: 'POST',
+			headers: { 'Content-Type': 'text/csv' },
+			body: 'email,password\na@b.com,password123\n',
+		});
+		expect(response.status).toBe(401);
+	});
+
 	it('POST /webhooks/stripe with a missing/invalid signature returns 400', async () => {
 		const response = await SELF.fetch('https://example.com/webhooks/stripe', {
 			method: 'POST',

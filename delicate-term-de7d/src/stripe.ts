@@ -39,11 +39,11 @@ export interface PriceConfig {
 	edition: MembershipEdition;
 }
 
-type PriceMap = Record<string, PriceConfig>;
+export type PriceMap = Record<string, PriceConfig>;
 
 // A caller-supplied id must look like a UUID before it reaches a `uuid` column —
 // Postgres raises (and Supabase surfaces a 500) on a malformed value otherwise.
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Fallback used by the webhook only (never at checkout) when a live
 // subscription references a price id that isn't in STRIPE_PRICE_MAP.
@@ -55,7 +55,7 @@ let cachedMap: PriceMap | undefined;
 // Parse + validate STRIPE_PRICE_MAP once per distinct value. Throws on a
 // malformed map so the caller can turn it into a 500 (checkout) or a logged
 // warning (webhook).
-function parsePriceMap(raw: string): PriceMap {
+export function parsePriceMap(raw: string): PriceMap {
 	if (raw === cachedRaw && cachedMap) return cachedMap;
 
 	let parsed: unknown;
@@ -180,7 +180,7 @@ function invoiceSubscriptionId(invoice: Stripe.Invoice): string | null {
 	return typeof raw === 'string' ? raw : (raw?.id ?? null);
 }
 
-interface PlainAddress {
+export interface PlainAddress {
 	line1: string;
 	line2: string | null;
 	city: string;
@@ -189,7 +189,7 @@ interface PlainAddress {
 	country: string;
 }
 
-function plainAddress(a: Record<string, unknown> | null | undefined): PlainAddress {
+export function plainAddress(a: Record<string, unknown> | null | undefined): PlainAddress {
 	return {
 		line1: typeof a?.line1 === 'string' ? a.line1 : '',
 		line2: typeof a?.line2 === 'string' ? a.line2 : null,
@@ -231,7 +231,7 @@ async function uidBySubscriptionId(env: Env, subscriptionId: string): Promise<st
 	return data?.user_id ?? null;
 }
 
-async function upsertMailingAddress(
+export async function upsertMailingAddress(
 	env: Env,
 	input: { membershipId: string; userId: string; recipientName: string; address: PlainAddress },
 ): Promise<void> {
@@ -471,6 +471,12 @@ async function createCheckoutSession(c: Context<HonoEnv>) {
 	const config = priceMap[priceId];
 	if (!config) return c.json({ error: 'Unknown price_id' }, 400);
 
+	// Full membership checkout is temporarily disabled. The handling below is
+	// left intact — remove this guard to re-enable it.
+	if (config.plan === 'full') {
+		return c.json({ error: 'Full membership is not currently available for purchase.' }, 403);
+	}
+
 	const params: Stripe.Checkout.SessionCreateParams = {
 		mode: 'subscription',
 		line_items: [{ price: priceId, quantity: 1 }],
@@ -483,9 +489,10 @@ async function createCheckoutSession(c: Context<HonoEnv>) {
 		cancel_url: c.env.MEMBERSHIP_CANCEL_URL,
 	};
 	if (typeof user.email === 'string') params.customer_email = user.email;
-	// `print` editions need a shipping address for the physical copy; the `full`
-	// membership always collects a mailing address too, regardless of edition.
-	if (config.edition === 'print' || config.plan === 'full') {
+	// `print` editions need a shipping address for the physical copy. The `full`
+	// membership would also collect a mailing address here, but that plan is
+	// gated off above — re-add `|| config.plan === 'full'` when re-enabling it.
+	if (config.edition === 'print') {
 		params.shipping_address_collection = { allowed_countries: SHIPPING_COUNTRIES };
 	}
 

@@ -135,14 +135,15 @@ edition also gets a row in `mailing_addresses`. The paywall
 
 ### Endpoints
 
-| Endpoint                        | Body                                                                    | Notes                                                                                                                                                              |
-| ------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `POST /create-checkout-session` | `{ "price_id": "price_…" }`                                             | 409 if the caller already has a membership. Returns `{ id, url }` — redirect the browser to `url`.                                                                 |
-| `POST /create-donation-session` | `{ "amount_cents": <int> }`                                            | One-time donation, hosted Checkout `mode: "payment"`. JWT required. `amount_cents` integer USD in `[100, 1_000_000]`. Returns `{ id, url }` — redirect to `url`. `donations` row written by the webhook. |
-| `POST /cancel-subscription`     | `{ "subscription_id": "sub_…" }`                                        | Sets `cancel_at_period_end`; access lasts until the period ends. 404 if the subscription isn't the caller's, 409 if it's not active.                               |
-| `POST /deactivate-account`      | _(none)_                                                                | Voids + cancels every active subscription, then bans the Supabase auth user (indefinite `ban_duration`).                                                           |
-| `POST /admin/gift-membership`   | `{ "target_uid", "price_id", "custom_expiration", "mailing_address"? }` | Admin only. Inserts a `memberships` row with `status='active'`, no Stripe subscription, `current_period_end = custom_expiration`.                                  |
-| `POST /webhooks/stripe`         | Stripe event (raw body)                                                 | Handles `checkout.session.completed` (subscription **and** donation), `invoice.paid`, `customer.subscription.updated`, `customer.subscription.deleted`, `payment_intent.succeeded`. Other events are acknowledged and ignored. |
+| Endpoint                        | Body                                                                    | Notes                                                                                                                                                                                                                                                                                                            |
+| ------------------------------- | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /create-checkout-session` | `{ "price_id": "price_…" }`                                             | 409 if the caller already has a membership. Returns `{ id, url }` — redirect the browser to `url`.                                                                                                                                                                                                               |
+| `POST /create-donation-session` | `{ "amount_cents": <int> }`                                             | One-time donation, hosted Checkout `mode: "payment"`. JWT required. `amount_cents` integer USD in `[100, 1_000_000]`. Returns `{ id, url }` — redirect to `url`. `donations` row written by the webhook.                                                                                                         |
+| `POST /cancel-subscription`     | `{ "subscription_id": "sub_…" }`                                        | Sets `cancel_at_period_end`; access lasts until the period ends. 404 if the subscription isn't the caller's, 409 if it's not active.                                                                                                                                                                             |
+| `POST /deactivate-account`      | _(none)_                                                                | Voids + cancels every active subscription, then bans the Supabase auth user (indefinite `ban_duration`).                                                                                                                                                                                                         |
+| `POST /admin/gift-membership`   | `{ "target_uid", "price_id", "custom_expiration", "mailing_address"? }` | Admin only. Inserts a `memberships` row with `status='active'`, no Stripe subscription, `current_period_end = custom_expiration`.                                                                                                                                                                                |
+| `POST /admin/migrate-users`     | CSV (`text/csv` raw, or multipart `file`)                               | Admin only. Bulk-creates **new** confirmed auth users + `profiles` rows; per row optionally grants a gift membership (`grant_membership,price_id,membership_expiration`, `+` address for `print`). ≤ 500 rows/call. Sequential, non-atomic; returns a per-row report (200 all-clean, 207 partial). See `API.md`. |
+| `POST /webhooks/stripe`         | Stripe event (raw body)                                                 | Handles `checkout.session.completed` (subscription **and** donation), `invoice.paid`, `customer.subscription.updated`, `customer.subscription.deleted`, `payment_intent.succeeded`. Other events are acknowledged and ignored.                                                                                   |
 
 ### `STRIPE_PRICE_MAP`
 
@@ -218,21 +219,22 @@ npm run deploy
 
 ## API reference
 
-| Method | Path                        | Auth             | Description                                                     |
-| ------ | --------------------------- | ---------------- | --------------------------------------------------------------- |
-| `GET`  | `/health`                   | Public           | Returns `{"ok":true}`                                           |
-| `GET`  | `/issues`                   | Public           | List all published issues (slug, number, date, cover, title)    |
-| `GET`  | `/issues/:slug/pdf`         | JWT              | Stream the PDF for a published issue from R2                    |
-| `POST` | `/admin/issues/:slug/pdf`   | JWT + Admin      | Upload a PDF for an issue (multipart `file` field)              |
-| `GET`  | `/covers/:filename`         | Public           | Serve a cover image from R2 (long-lived cache headers)          |
-| `POST` | `/admin/issues/:slug/cover` | JWT + Admin      | Upload a cover image; updates `cover_image_url` in Supabase     |
-| `GET`  | `/debug/list-bucket`        | JWT              | List all R2 object keys — **remove before production**          |
-| `POST` | `/create-checkout-session`  | JWT              | Start a Stripe Checkout for a membership subscription           |
-| `POST` | `/create-donation-session`  | JWT              | Start a Stripe Checkout for a one-time donation (`mode: payment`) |
-| `POST` | `/cancel-subscription`      | JWT              | Set `cancel_at_period_end` on the caller's subscription         |
-| `POST` | `/deactivate-account`       | JWT              | Pause + cancel the caller's subscriptions and ban the auth user |
-| `POST` | `/admin/gift-membership`    | JWT + Admin      | Grant a membership with no Stripe subscription                  |
-| `POST` | `/webhooks/stripe`          | Stripe signature | Sync subscription state from Stripe into `memberships`          |
+| Method | Path                        | Auth             | Description                                                         |
+| ------ | --------------------------- | ---------------- | ------------------------------------------------------------------- |
+| `GET`  | `/health`                   | Public           | Returns `{"ok":true}`                                               |
+| `GET`  | `/issues`                   | Public           | List all published issues (slug, number, date, cover, title)        |
+| `GET`  | `/issues/:slug/pdf`         | JWT              | Stream the PDF for a published issue from R2                        |
+| `POST` | `/admin/issues/:slug/pdf`   | JWT + Admin      | Upload a PDF for an issue (multipart `file` field)                  |
+| `GET`  | `/covers/:filename`         | Public           | Serve a cover image from R2 (long-lived cache headers)              |
+| `POST` | `/admin/issues/:slug/cover` | JWT + Admin      | Upload a cover image; updates `cover_image_url` in Supabase         |
+| `GET`  | `/debug/list-bucket`        | JWT              | List all R2 object keys — **remove before production**              |
+| `POST` | `/create-checkout-session`  | JWT              | Start a Stripe Checkout for a membership subscription               |
+| `POST` | `/create-donation-session`  | JWT              | Start a Stripe Checkout for a one-time donation (`mode: payment`)   |
+| `POST` | `/cancel-subscription`      | JWT              | Set `cancel_at_period_end` on the caller's subscription             |
+| `POST` | `/deactivate-account`       | JWT              | Pause + cancel the caller's subscriptions and ban the auth user     |
+| `POST` | `/admin/gift-membership`    | JWT + Admin      | Grant a membership with no Stripe subscription                      |
+| `POST` | `/admin/migrate-users`      | JWT + Admin      | Bulk-create auth users from a CSV, optionally with gift memberships |
+| `POST` | `/webhooks/stripe`          | Stripe signature | Sync subscription state from Stripe into `memberships`              |
 
 ### Request / response notes
 

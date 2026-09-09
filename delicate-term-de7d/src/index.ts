@@ -7,6 +7,7 @@ import { adminMiddleware } from './admin';
 import { membershipMiddleware } from './membership';
 import { getSupabase } from './supabase';
 import { registerStripeRoutes } from './stripe';
+import { registerMigrationRoutes } from './migrate';
 
 type Variables = { user: JWTPayload };
 
@@ -216,5 +217,8 @@ app.get('/debug/list-bucket', authMiddleware, async (c) => {
 // Stripe membership endpoints: /create-checkout-session, /cancel-subscription,
 // /deactivate-account, /admin/gift-membership, /webhooks/stripe
 registerStripeRoutes(app);
+
+// Admin-only bulk user import: POST /admin/migrate-users (CSV in, per-row report out)
+registerMigrationRoutes(app);
 
 export default app;

@@ -71,15 +71,15 @@ A single `app.use('*', …)` wraps every route:
 Environment (`.dev.vars` locally, `wrangler secret put` in production — see `README.md`).
 The behaviour-relevant ones:
 
-| Variable                 | Notes                                                                                                                                                                              |
-| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ALLOWED_ORIGIN`         | Comma-separated allow-list. **Production must be exactly** `https://ravnagorachetniks.org,http://localhost:3000`. Empty ⇒ no CORS headers at all (browser calls fail).                |
-| `MEMBERSHIP_SUCCESS_URL` | Prod: `https://ravnagorachetniks.org/membership/success?session_id={CHECKOUT_SESSION_ID}`. Local: `http://localhost:3000/membership/success?session_id={CHECKOUT_SESSION_ID}`. `{CHECKOUT_SESSION_ID}` is substituted by Stripe. |
-| `MEMBERSHIP_CANCEL_URL`  | Prod: `https://ravnagorachetniks.org/membership`. Local: `http://localhost:3000/membership`.                                                                                         |
-| `DONATION_SUCCESS_URL`   | Prod: `https://ravnagorachetniks.org/donate/success?session_id={CHECKOUT_SESSION_ID}`. Local: `http://localhost:3000/donate/success?session_id={CHECKOUT_SESSION_ID}`. Same placeholder rule. |
-| `DONATION_CANCEL_URL`    | Prod: `https://ravnagorachetniks.org/donate`. Local: `http://localhost:3000/donate`.                                                                                                 |
+| Variable                 | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `ALLOWED_ORIGIN`         | Comma-separated allow-list. **Production must be exactly** `https://ravnagorachetniks.org,http://localhost:3000`. Empty ⇒ no CORS headers at all (browser calls fail).                                                                                                                                                                                                                                                                                                               |
+| `MEMBERSHIP_SUCCESS_URL` | Prod: `https://ravnagorachetniks.org/membership/success?session_id={CHECKOUT_SESSION_ID}`. Local: `http://localhost:3000/membership/success?session_id={CHECKOUT_SESSION_ID}`. `{CHECKOUT_SESSION_ID}` is substituted by Stripe.                                                                                                                                                                                                                                                     |
+| `MEMBERSHIP_CANCEL_URL`  | Prod: `https://ravnagorachetniks.org/membership`. Local: `http://localhost:3000/membership`.                                                                                                                                                                                                                                                                                                                                                                                         |
+| `DONATION_SUCCESS_URL`   | Prod: `https://ravnagorachetniks.org/donate/success?session_id={CHECKOUT_SESSION_ID}`. Local: `http://localhost:3000/donate/success?session_id={CHECKOUT_SESSION_ID}`. Same placeholder rule.                                                                                                                                                                                                                                                                                        |
+| `DONATION_CANCEL_URL`    | Prod: `https://ravnagorachetniks.org/donate`. Local: `http://localhost:3000/donate`.                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `STRIPE_PRICE_MAP`       | JSON `{ "<real price id>": { "plan": "full"\|"supporting", "edition": "digital"\|"print"\|null } }`. **Production must contain all four real Stripe price ids**: supporting/digital, supporting/print, supporting/**both**, full. "both" has no dedicated edition — map it to `edition: "print"` (that is what makes Checkout collect a shipping address). Consequence: a "both" member's `memberships` row is indistinguishable from a plain "print" member (no `price_id` column). |
-| `STRIPE_WEBHOOK_SECRET`  | `whsec_…` from the Stripe Dashboard webhook endpoint.                                                                                                                                |
+| `STRIPE_WEBHOOK_SECRET`  | `whsec_…` from the Stripe Dashboard webhook endpoint.                                                                                                                                                                                                                                                                                                                                                                                                                                |
 
 **Stripe Dashboard webhook** must subscribe to: `checkout.session.completed`,
 `invoice.paid`, `customer.subscription.updated`, `customer.subscription.deleted`,
@@ -95,21 +95,22 @@ The behaviour-relevant ones:
 
 ## Summary of endpoints
 
-| Method | Path                        | Auth                         | Purpose                                            |
-| ------ | --------------------------- | ---------------------------- | -------------------------------------------------- |
-| GET    | `/health`                   | none                         | Liveness check                                     |
-| GET    | `/issues`                   | none                         | List published issues                              |
-| GET    | `/covers/:filename`         | none                         | Serve a cover image from R2                        |
-| GET    | `/issues/:slug/pdf`         | JWT + active membership      | Stream a published issue's PDF                     |
-| POST   | `/create-checkout-session`  | JWT                          | Start a Stripe membership Checkout session         |
-| POST   | `/create-donation-session`  | JWT                          | Start a Stripe one-time donation Checkout session  |
-| POST   | `/cancel-subscription`      | JWT                          | Schedule a subscription to cancel at period end    |
-| POST   | `/deactivate-account`       | JWT                          | Pause/cancel all subscriptions and ban the account |
-| POST   | `/admin/issues/:slug/pdf`   | JWT + admin                  | Upload an issue PDF to R2                          |
-| POST   | `/admin/issues/:slug/cover` | JWT + admin                  | Upload an issue cover image and update the DB      |
-| POST   | `/admin/gift-membership`    | JWT + admin                  | Grant a membership with no Stripe subscription     |
-| GET    | `/debug/list-bucket`        | JWT (any authenticated user) | List all R2 object keys                            |
-| POST   | `/webhooks/stripe`          | Stripe signature             | Stripe subscription + donation lifecycle webhook   |
+| Method | Path                        | Auth                         | Purpose                                                             |
+| ------ | --------------------------- | ---------------------------- | ------------------------------------------------------------------- |
+| GET    | `/health`                   | none                         | Liveness check                                                      |
+| GET    | `/issues`                   | none                         | List published issues                                               |
+| GET    | `/covers/:filename`         | none                         | Serve a cover image from R2                                         |
+| GET    | `/issues/:slug/pdf`         | JWT + active membership      | Stream a published issue's PDF                                      |
+| POST   | `/create-checkout-session`  | JWT                          | Start a Stripe membership Checkout session                          |
+| POST   | `/create-donation-session`  | JWT                          | Start a Stripe one-time donation Checkout session                   |
+| POST   | `/cancel-subscription`      | JWT                          | Schedule a subscription to cancel at period end                     |
+| POST   | `/deactivate-account`       | JWT                          | Pause/cancel all subscriptions and ban the account                  |
+| POST   | `/admin/issues/:slug/pdf`   | JWT + admin                  | Upload an issue PDF to R2                                           |
+| POST   | `/admin/issues/:slug/cover` | JWT + admin                  | Upload an issue cover image and update the DB                       |
+| POST   | `/admin/gift-membership`    | JWT + admin                  | Grant a membership with no Stripe subscription                      |
+| POST   | `/admin/migrate-users`      | JWT + admin                  | Bulk-create auth users from a CSV, optionally with gift memberships |
+| GET    | `/debug/list-bucket`        | JWT (any authenticated user) | List all R2 object keys                                             |
+| POST   | `/webhooks/stripe`          | Stripe signature             | Stripe subscription + donation lifecycle webhook                    |
 
 ---
 
@@ -286,6 +287,84 @@ Grant a membership that has no Stripe subscription or customer (`stripe_subscrip
 
 ---
 
+## POST /admin/migrate-users
+
+Bulk-create **new** Supabase auth users from a CSV — for importing an existing membership roster into a fresh database. Each row becomes a confirmed auth user (usable immediately, no verification email), a `profiles` row, and, if the row asks for it, a gift `memberships` row (no Stripe subscription/customer, exactly like `POST /admin/gift-membership`) plus an optional `mailing_addresses` row.
+
+- **Auth:** JWT + admin. Middleware order: `authMiddleware` → `adminMiddleware` → handler (`src/migrate.ts` → `registerMigrationRoutes`).
+- **Params:** none.
+- **Request body:** a CSV, either
+  - raw with `Content-Type: text/csv` (also accepted: `application/csv`, `text/plain`, or no `Content-Type`), or
+  - `multipart/form-data` with the CSV as the **`file`** part.
+- **CSV shape:** first row is a header; column order is free; unknown columns are ignored; blank lines are skipped. Quoted fields, `""` escapes, and LF/CRLF endings are supported. A leading UTF-8 BOM is stripped. Values are trimmed **except `password`**, which is sent to GoTrue verbatim. Header names are matched case-insensitively.
+
+  | Column                                                                        | Required                        | Notes                                                                                                                             |
+  | ----------------------------------------------------------------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+  | `email`                                                                       | yes                             | must match `^[^\s@]+@[^\s@]+\.[^\s@]+$`, ≤ 254 chars; lower-cased before use                                                      |
+  | `password`                                                                    | yes                             | 8–72 characters (bcrypt's 72-byte cap); Supabase's project password policy is still enforced by GoTrue on top of this             |
+  | `full_name`                                                                   | no                              | stored as `user_metadata.full_name`; also the default `recipient_name` for a print address                                        |
+  | `email_confirm`                                                               | no (default `true`)             | `true/false/1/0/yes/no/y/n`, case-insensitive; `false` creates an unconfirmed user who must confirm before signing in             |
+  | `role`                                                                        | no (default `user`)             | `user` or `admin` only — **`admin` grants full admin API access, so vet the CSV**                                                 |
+  | `grant_membership`                                                            | no (default `false`)            | `true/false/…`; when true, `price_id` and `membership_expiration` become required for that row                                    |
+  | `price_id`                                                                    | required iff `grant_membership` | must start with `price_` **and** be a key of `STRIPE_PRICE_MAP`; its `plan`/`edition` are copied onto the `memberships` row       |
+  | `membership_expiration`                                                       | required iff `grant_membership` | any `new Date(...)`-parseable value; stored as `current_period_end`. A past date creates an already-expired (inactive) membership |
+  | `recipient_name`, `line1`, `line2`, `city`, `state`, `postal_code`, `country` | no                              | only read when the resolved `price_id` maps to `edition: "print"` **and** `line1` is non-empty; written to `mailing_addresses`    |
+
+- **Processing model:** rows are handled **sequentially, and the operation is not atomic** — earlier rows are already committed when a later row fails. Re-running the same CSV is safe: rows whose auth user now exists come back as `skipped`. Per row, in order: (1) `createAuthUser` via `POST <SUPABASE_URL>/auth/v1/admin/users`; (2) `profiles` upsert on `id` (idempotent w.r.t. a `handle_new_user` trigger); (3) if requested, insert the gift `memberships` row and, for `print`, upsert `mailing_addresses`; (4) best-effort `bustAccessCache(user_id)`.
+- **Limits:** at most **500 rows per call** (`MAX_ROWS`). Each row costs ~2–4 Worker subrequests, so on the Cloudflare **Free** plan (50 subrequests/request) only ~12–20 rows per call are viable; the **Paid** plan (10,000) comfortably covers a full 500. Split larger rosters across calls.
+- **Secrets:** passwords are never written to logs; only `email` + outcome + failure reason are logged.
+
+- **Row outcomes** (`status` per entry in `results`):
+  - `created` — auth user + profile written. `membership` is then `"granted"` (with `membership_id`), `"failed"` (user still exists; `reason` explains), `"skipped"` (only if `grant_membership` was set but internally short-circuited), or absent when no membership was requested.
+  - `skipped` — an auth user with that email already exists; nothing else was touched. **Grant a membership to a pre-existing user via `POST /admin/gift-membership` instead** (this endpoint does not look up existing users).
+  - `failed` — nothing was created for this row. Causes: validation failure (bad email/password/role/boolean, missing/unknown `price_id`, bad date), a duplicate email within the same CSV, an auth-creation error, or a `profiles` write error after the user was created (`reason` starts `user created but profile write failed` — that user exists but has no/!stale profile row).
+
+- **200** — batch processed, **every row `created` or `skipped`** (`failed === 0`):
+  ```json
+  {
+    "total": 3,
+    "created": 2,
+    "skipped": 1,
+    "failed": 0,
+    "memberships_granted": 2,
+    "results": [
+      {
+        "row": 1,
+        "email": "ana@example.org",
+        "status": "created",
+        "user_id": "…",
+        "membership": "granted",
+        "membership_id": "…"
+      },
+      {
+        "row": 2,
+        "email": "bo@example.org",
+        "status": "created",
+        "user_id": "…"
+      },
+      {
+        "row": 3,
+        "email": "cy@example.org",
+        "status": "skipped",
+        "reason": "auth user already exists"
+      }
+    ]
+  }
+  ```
+- **207 Multi-Status** — batch processed but **at least one row `failed`** (and at least one succeeded/skipped). Same body shape; inspect `results` for the `failed` rows and their `reason`.
+- **400** `{ "error": "Empty CSV body" }` — body is empty/whitespace.
+- **400** `{ "error": "Could not read request body" }` — body/multipart could not be read.
+- **400** `{ "error": "multipart body needs a \"file\" part" }` — `multipart/form-data` with no `file` part.
+- **400** `{ "error": "CSV needs a header row and at least one data row" }` — fewer than 2 rows parsed.
+- **400** `{ "error": "CSV header must contain \"email\" and \"password\" columns" }`.
+- **400** `{ "error": "Too many rows: <n> (max 500 per call)" }`.
+- **415** `{ "error": "Unsupported Content-Type: <value>" }` — not one of the accepted content types.
+- **401** `{ "error": "Invalid token: missing user ID" }` — JWT has no `sub`.
+- **500** `{ "error": "Internal server error" }` — `STRIPE_PRICE_MAP` is misconfigured (it is parsed once up front).
+- Plus middleware **401/403** as for the other admin routes.
+
+---
+
 # Stripe / membership
 
 All three are registered with `authMiddleware` only (`src/stripe.ts` → `registerStripeRoutes`). They enforce their own ownership / state checks against Supabase.
@@ -333,8 +412,8 @@ subscription) for a free-choice donation and return its id + hosted URL.
 - **Params:** none.
 - **Request body:** `application/json`:
 
-  | Field         | Type   | Required | Validation                                                                                          |
-  | ------------- | ------ | -------- | -------------------------------------------------------------------------------------------------- |
+  | Field          | Type   | Required | Validation                                                                                                                                                                               |
+  | -------------- | ------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
   | `amount_cents` | number | yes      | integer, `> 0`, and within `[DONATION_MIN_CENTS, DONATION_MAX_CENTS]` = **`[100, 1_000_000]`** (USD $1.00 – $10,000.00). These are hardcoded constants in `src/stripe.ts`, not env vars. |
 
   Currency is fixed server-side to `usd`. No other fields are read — the donor's
@@ -425,13 +504,13 @@ Stripe subscription-lifecycle webhook. **No Hono auth middleware** — it is reg
 
 **Handled `event.type` values:**
 
-| `event.type`                    | Action                                                                                                                                                                                                                                              |
-| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `event.type`                    | Action                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `checkout.session.completed`    | **`session.mode === "payment"`:** if `session.metadata.kind === "donation"`, `recordDonationFromSession` (see below); any other payment-mode session is logged and ignored. **`session.mode === "subscription"`** (and `session.subscription` is a string): resolves `uid` from `client_reference_id` (fallback `metadata.supabase_uid`) and a `price_id` hint from `metadata.price_id`, then `upsertSubscriptionFromStripe`. |
-| `invoice.paid`                  | Extracts the subscription id from the invoice (handles old `invoice.subscription` and new `parent.subscription_details.subscription` shapes), then `upsertSubscriptionFromStripe`.                                                                  |
-| `customer.subscription.updated` | `upsertSubscriptionFromStripe` for `sub.id`, passing `uid` from `sub.metadata.supabase_uid` if present.                                                                                                                                             |
-| `customer.subscription.deleted` | `markSubscriptionCanceled` — sets `memberships.status = "canceled"`, copies `cancel_at_period_end`, busts the access cache.                                                                                                                         |
-| `payment_intent.succeeded`      | `markDonationSucceeded` — sets `donations.status = "succeeded"` for the row matching `stripe_payment_intent_id`. No-ops when no donation row matches (e.g. a membership invoice's PaymentIntent). Covers a delayed capture where `checkout.session.completed` arrived unpaid. |
+| `invoice.paid`                  | Extracts the subscription id from the invoice (handles old `invoice.subscription` and new `parent.subscription_details.subscription` shapes), then `upsertSubscriptionFromStripe`.                                                                                                                                                                                                                                            |
+| `customer.subscription.updated` | `upsertSubscriptionFromStripe` for `sub.id`, passing `uid` from `sub.metadata.supabase_uid` if present.                                                                                                                                                                                                                                                                                                                       |
+| `customer.subscription.deleted` | `markSubscriptionCanceled` — sets `memberships.status = "canceled"`, copies `cancel_at_period_end`, busts the access cache.                                                                                                                                                                                                                                                                                                   |
+| `payment_intent.succeeded`      | `markDonationSucceeded` — sets `donations.status = "succeeded"` for the row matching `stripe_payment_intent_id`. No-ops when no donation row matches (e.g. a membership invoice's PaymentIntent). Covers a delayed capture where `checkout.session.completed` arrived unpaid.                                                                                                                                                 |
 
 **Explicitly ignored:** every other `event.type` (the `default` branch, which the code notes includes `charge.refunded` — there is no purchase ledger to reverse). Ignored events still return `200`.
 
